@@ -108,6 +108,7 @@ define(['emby-input', 'emby-button', 'emby-checkbox'], function () {
             window.ApiClient.getInstalledPlugins().then(function (plugins) {
                 var me = (plugins || []).filter(function (p) { return (p.Id || '').toLowerCase() === pluginId; })[0];
                 view.querySelector('#tbFooterVersion').textContent = me && me.Version ? 'v' + me.Version : '';
+                if (me && me.Version) view.querySelector('.tb-version').textContent = 'TrailerBridge v' + me.Version;
             }).catch(function () { });
             loadConfig(view).then(function () { return loadStatus(view); });
         });
