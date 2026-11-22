@@ -1,0 +1,126 @@
+<div id="TrailerBridgeConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+     data-require="emby-input,emby-button,emby-checkbox"
+     data-controller="__plugin/TrailerBridgeJS">
+
+    <style>
+        /* Arr Companion / Home Screen Companion look: Emby's surfaces, hairlines, Emby green as the one accent. */
+        #TrailerBridgeConfigPage {
+            --tb-primary: #52B54B;
+            --tb-primary-hover: #5fc458;
+            --tb-primary-text: #52B54B;
+            --tb-warning-text: #e6c15a;
+            --tb-danger-text: #e57373;
+            --tb-tint-1: rgba(128,128,128,0.04);
+            --tb-tint-2: rgba(128,128,128,0.08);
+            --tb-tint-3: rgba(128,128,128,0.15);
+            --tb-hairline: var(--line-color, rgba(128,128,128,0.2));
+            --tb-hairline-strong: rgba(128,128,128,0.3);
+            --tb-input-bg: rgba(255,255,255,0.06);
+            --tb-footer-bg: #181818;
+            --tb-footer-ink: #aaaaaa;
+        }
+        #TrailerBridgeConfigPage[data-tb-theme="light"] {
+            --tb-primary-text: #3a8c34;
+            --tb-warning-text: #9a7a12;
+            --tb-danger-text: #cc3333;
+            --tb-input-bg: rgba(0,0,0,0.04);
+            --tb-footer-bg: #c5cad1;
+            --tb-footer-ink: #555555;
+        }
+        #TrailerBridgeConfigPage .content-primary { max-width: 900px; }
+        #TrailerBridgeConfigPage .verticalSection { padding-bottom: 60px; }
+        .tb-header { display: flex; align-items: baseline; gap: 12px; margin: 0 0 16px; }
+        .tb-header h2 { margin: 0; font-weight: 600; }
+        .tb-version { font-size: 0.8em; color: var(--theme-text-secondary); }
+        .tb-panel { background: var(--theme-background-level2); border: 1px solid var(--tb-hairline); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .tb-panel-title { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 12px; }
+        .tb-panel-title .md-icon { opacity: 0.65; }
+        .tb-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .tb-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+        .tb-field > span { font-size: 0.8em; color: var(--theme-text-secondary); font-weight: 500; }
+        .tb-input { height: 32px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--tb-hairline-strong); background: var(--tb-input-bg); color: var(--theme-text-primary); font: inherit; font-size: 0.9em; min-width: 0; flex: 1 1 260px; }
+        .tb-btn { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--tb-hairline-strong); background: var(--tb-tint-2); color: var(--theme-text-primary); font: inherit; font-size: 0.9em; font-weight: 500; cursor: pointer; white-space: nowrap; }
+        .tb-btn:hover:not(:disabled) { background: var(--tb-tint-3); }
+        .tb-btn:disabled { opacity: 0.5; cursor: default; }
+        .tb-btn .md-icon { font-size: 1.1em; }
+        .tb-btn.primary { background: var(--tb-primary); border-color: var(--tb-primary); color: #fff; }
+        .tb-btn.primary:hover:not(:disabled) { background: var(--tb-primary-hover); }
+        .tb-btn.danger { color: var(--tb-danger-text); }
+        .tb-cb, .tb-cb.emby-checkbox-label { display: inline-flex !important; width: auto !important; margin: 2px 18px 6px 0 !important; font-size: 0.92em; }
+        .tb-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 0.9em; margin-bottom: 12px; }
+        .tb-facts dt { color: var(--theme-text-secondary); }
+        .tb-facts dd { margin: 0; overflow-wrap: anywhere; }
+        .tb-count { font-size: 2em; font-weight: 600; line-height: 1; margin-right: 8px; }
+        .tb-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600; white-space: nowrap; }
+        .tb-pill.ok { color: var(--tb-primary-text); background: rgba(82,181,75,0.12); }
+        .tb-pill.warn { color: var(--tb-warning-text); background: rgba(230,193,90,0.12); }
+        .tb-msg { font-size: 0.88em; color: var(--theme-text-secondary); margin-top: 10px; min-height: 1.2em; }
+        .tb-msg.error { color: var(--tb-danger-text); }
+        .tb-save { margin-top: 4px; }
+        #TrailerBridgeConfigPage .plugin-footer {
+            position: fixed; bottom: 0; left: var(--tb-footer-left, 0); right: 0; z-index: 200;
+            background: var(--tb-footer-bg); color: var(--tb-footer-ink);
+            height: 50px; padding: 0 28px; display: flex; align-items: center; justify-content: center;
+            font-size: 0.9em; border-top: 1px solid var(--line-color); box-sizing: border-box;
+        }
+        #TrailerBridgeConfigPage .plugin-footer .footer-sep { margin: 0 12px; opacity: 0.35; }
+    </style>
+
+    <div class="content-primary">
+        <div class="verticalSection">
+            <div class="tb-header">
+                <h2>TrailerBridge</h2>
+                <span class="tb-version">TrailerBridge v0.1.0.0</span>
+            </div>
+
+            <div class="tb-panel">
+                <div class="tb-panel-title"><i class="md-icon">link</i>Trailer links</div>
+                <div class="tb-row" style="margin-bottom:12px;">
+                    <span class="tb-count" id="tbLinked">–</span><span>titles linked</span>
+                </div>
+                <div class="tb-row">
+                    <button type="button" class="tb-btn primary" id="tbCreate"><i class="md-icon">add_link</i>Create links now</button>
+                    <button type="button" class="tb-btn danger" id="tbRemove"><i class="md-icon">link_off</i>Remove all links</button>
+                </div>
+                <div class="tb-msg" id="tbLinksMsg"></div>
+            </div>
+
+            <div class="tb-panel">
+                <div class="tb-panel-title"><i class="md-icon">download</i>yt-dlp</div>
+                <dl class="tb-facts">
+                    <dt>Version</dt><dd id="tbVersion">–</dd>
+                    <dt>In use</dt><dd id="tbInUse">–</dd>
+                    <dt>JavaScript runtime</dt><dd id="tbJs">–</dd>
+                </dl>
+                <label class="tb-field">
+                    <span>Path to yt-dlp</span>
+                    <input type="text" class="tb-input" id="tbYtDlpPath" placeholder="Automatic" />
+                </label>
+                <div class="tb-row">
+                    <button type="button" class="tb-btn" id="tbUpdate"><i class="md-icon">update</i>Update yt-dlp</button>
+                </div>
+                <div class="tb-msg" id="tbYtMsg"></div>
+            </div>
+
+            <div class="tb-panel">
+                <div class="tb-panel-title"><i class="md-icon">settings</i>Settings</div>
+                <label class="emby-checkbox-label tb-cb">
+                    <input type="checkbox" is="emby-checkbox" id="tbEnabled" />
+                    <span>Enabled</span>
+                </label>
+                <label class="tb-field">
+                    <span>Link address</span>
+                    <input type="text" class="tb-input" id="tbLinkHost" placeholder="127.0.0.1" />
+                </label>
+                <div class="tb-save">
+                    <button type="button" class="tb-btn primary" id="tbSave"><i class="md-icon">save</i>Save</button>
+                </div>
+                <div class="tb-msg" id="tbSaveMsg"></div>
+            </div>
+        </div>
+
+        <div class="plugin-footer">
+            <span id="tbFooterVersion"></span>
+        </div>
+    </div>
+</div>
