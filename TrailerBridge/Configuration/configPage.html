@@ -39,6 +39,8 @@
         .tb-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
         .tb-field > span { font-size: 0.8em; color: var(--theme-text-secondary); font-weight: 500; }
         .tb-input { box-sizing: border-box; height: 32px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--tb-hairline-strong); background: var(--tb-input-bg); color: var(--theme-text-primary); font: inherit; font-size: 0.9em; min-width: 0; width: 100%; max-width: 640px; }
+        .tb-select { max-width: 200px; cursor: pointer; }
+        .tb-select option { background: var(--theme-background-level2, #202020); color: var(--theme-text-primary); }
         .tb-btn { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--tb-hairline-strong); background: var(--tb-tint-2); color: var(--theme-text-primary); font: inherit; font-size: 0.9em; font-weight: 500; cursor: pointer; white-space: nowrap; }
         .tb-btn:hover:not(:disabled) { background: var(--tb-tint-3); }
         .tb-btn:disabled { opacity: 0.5; cursor: default; }
@@ -107,6 +109,14 @@
                 <label class="emby-checkbox-label tb-cb">
                     <input type="checkbox" is="emby-checkbox" id="tbEnabled" />
                     <span>Enabled</span>
+                </label>
+                <label class="tb-field">
+                    <span>Quality</span>
+                    <select class="tb-input tb-select" id="tbQuality">
+                        <option value="1080">1080p</option>
+                        <option value="720">720p</option>
+                        <option value="360">360p</option>
+                    </select>
                 </label>
                 <label class="tb-field">
                     <span>Link address</span>

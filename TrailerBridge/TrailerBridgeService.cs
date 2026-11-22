@@ -95,11 +95,23 @@ namespace TrailerBridge
             var videoId = item == null ? null : Links.YouTubeId(item);
             if (videoId == null) throw new ResourceNotFoundException();
 
+            var head = string.Equals(Request.Verb, "HEAD", StringComparison.OrdinalIgnoreCase);
+            // Emby's ffmpeg on this machine gets the HLS playlist (it fetches the segments from YouTube itself)
+            // or a redirect to the mp4. A client gets the mp4 bytes through the server: the URLs are tied to
+            // the server's address, and old TVs may not manage YouTube's TLS.
+            if (loopback && !config.Proxy)
+            {
+                var source = await Resolver.GetAsync(videoId, config.Quality, CancellationToken.None).ConfigureAwait(false);
+                if (source.Playlist == null) return _results.GetRedirectResult(source.Url);
+                // Only ffmpeg gets the playlist. Emby's direct play passes the link's response on to the client
+                // as is, and a client can't load YouTube's segments (bound to this server's address); an mp4
+                // instead would play there at 360p. Refused, the client falls back to Emby's own stream
+                // (ffmpeg, video copied). The User-Agent only picks the answer; the checks above decide access.
+                if (!ua.StartsWith("Lavf/", StringComparison.Ordinal)) throw new ResourceNotFoundException();
+                return new PlaylistWriter(source.Playlist, head);
+            }
             var url = await Resolver.GetUrlAsync(videoId, CancellationToken.None).ConfigureAwait(false);
-            // Emby's ffmpeg on this machine follows a redirect; a client gets the bytes through the server
-            // (the URL is tied to the server's address, and old TVs may not manage YouTube's TLS).
-            if (loopback && !config.Proxy) return _results.GetRedirectResult(url);
-            return new ProxyWriter(videoId, url, range, string.Equals(Request.Verb, "HEAD", StringComparison.OrdinalIgnoreCase));
+            return new ProxyWriter(videoId, url, range, head);
         }
 
         public Task<object> Head(PlayRequest request) => Get(request);
@@ -155,6 +167,29 @@ namespace TrailerBridge
             var diff = 0;
             for (var i = 0; i < given.Length; i++) diff |= given[i] ^ expected[i];
             return diff == 0;
+        }
+    }
+
+    /// <summary>The cut-down HLS master playlist (its URIs are all on manifest.googlevideo.com).</summary>
+    internal sealed class PlaylistWriter : IAsyncStreamWriter
+    {
+        private readonly byte[] _body;
+        private readonly bool _head;
+
+        internal PlaylistWriter(string playlist, bool head)
+        {
+            _body = System.Text.Encoding.UTF8.GetBytes(playlist);
+            _head = head;
+        }
+
+        public async Task WriteToAsync(IResponse response, CancellationToken ct)
+        {
+            response.StatusCode = 200;
+            response.ContentType = "application/vnd.apple.mpegurl";
+            // No Content-Length on purpose: with one, ffprobe takes the playlist's few bytes over the trailer's
+            // duration as its bitrate (a few hundred bit/s), and Emby then transcodes to that.
+            if (_head) return;
+            await response.OutputWriter.WriteAsync(new ReadOnlyMemory<byte>(_body), ct).ConfigureAwait(false);
         }
     }
 

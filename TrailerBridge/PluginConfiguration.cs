@@ -17,6 +17,10 @@ namespace TrailerBridge
         // that play the link themselves (older apps) reach it from the local network.
         public string LinkHost { get; set; } = "";
 
+        // 1080, 720 or 360: the highest the server's ffmpeg gets (HLS, H.264 first); 360 is the single-file mp4.
+        // Clients that play the link themselves and the proxy always get the 360p mp4.
+        public int Quality { get; set; } = 1080;
+
         // false = 302 to the YouTube video URL (the server's ffmpeg follows it); true = the bytes go through the plugin.
         public bool Proxy { get; set; } = false;
     }
