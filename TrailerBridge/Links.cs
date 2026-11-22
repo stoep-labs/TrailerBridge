@@ -88,6 +88,23 @@ namespace TrailerBridge
             return h.Contains(":") && !h.StartsWith("[") ? "[" + h + "]" : h;
         }
 
+        /// <summary>The link file for a title in this folder.</summary>
+        private static string LinkPath(string folder) =>
+            Path.Combine(folder, TrailersFolder, Path.GetFileName(folder.TrimEnd('\\', '/')) + Suffix);
+
+        /// <summary>
+        /// The container Emby stored when it first probed the title's link ("hls", "mp4", ...), or null when it
+        /// has not played it yet. Emby keeps that first probe and later tells ffmpeg the format (-f mp4).
+        /// </summary>
+        internal static string? ProbedContainer(BaseItem item)
+        {
+            var folder = item.ContainingFolderPath;
+            if (string.IsNullOrEmpty(folder)) return null;
+            var trailer = LibraryManager.FindByPath(LinkPath(folder), false);
+            var container = trailer?.Container;
+            return string.IsNullOrEmpty(container) ? null : container;
+        }
+
         /// <summary>The YouTube video id of the item's first YouTube remote trailer.</summary>
         internal static string? YouTubeId(BaseItem item) =>
             (item.RemoteTrailers ?? Array.Empty<string>()).Select(Resolver.VideoId).FirstOrDefault(v => v != null);
@@ -138,7 +155,7 @@ namespace TrailerBridge
                     {
                         if (!Directory.Exists(folder)) continue;
                         var trailers = Path.Combine(folder, TrailersFolder);
-                        var link = Path.Combine(trailers, Path.GetFileName(folder.TrimEnd('\\', '/')) + Suffix);
+                        var link = LinkPath(folder);
                         var bridges = Directory.Exists(trailers)
                             ? Directory.GetFiles(trailers, "*" + Suffix).Where(IsBridgeFile).ToList()
                             : new List<string>();

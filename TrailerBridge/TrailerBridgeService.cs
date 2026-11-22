@@ -99,7 +99,12 @@ namespace TrailerBridge
             // Emby's ffmpeg on this machine gets the HLS playlist (it fetches the segments from YouTube itself)
             // or a redirect to the mp4. A client gets the mp4 bytes through the server: the URLs are tied to
             // the server's address, and old TVs may not manage YouTube's TLS.
-            if (loopback && !config.Proxy)
+            // A link Emby first saw as an mp4 (360p, or HLS failed that time) stays one: Emby then forces the mp4
+            // format on ffmpeg and a playlist would not play.
+            var probed = Links.ProbedContainer(item!);
+            if (probed != null && !string.Equals(probed, "hls", StringComparison.OrdinalIgnoreCase))
+                Log.Info("Trailer link of " + request.Id + " was first played as " + probed + ": it stays the single-file mp4");
+            if (loopback && !config.Proxy && (probed == null || string.Equals(probed, "hls", StringComparison.OrdinalIgnoreCase)))
             {
                 var source = await Resolver.GetAsync(videoId, config.Quality, CancellationToken.None).ConfigureAwait(false);
                 if (source.Playlist == null) return _results.GetRedirectResult(source.Url);
@@ -111,6 +116,7 @@ namespace TrailerBridge
                 return new PlaylistWriter(source.Playlist, head);
             }
             var url = await Resolver.GetUrlAsync(videoId, CancellationToken.None).ConfigureAwait(false);
+            if (loopback && !config.Proxy) return _results.GetRedirectResult(url);
             return new ProxyWriter(videoId, url, range, head);
         }
 

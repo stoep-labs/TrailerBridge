@@ -17,7 +17,7 @@ Download `TrailerBridge.dll` from the [latest release](../../releases/latest), p
 ## Limits
 - Above 360p only when Emby's own ffmpeg plays the link (the normal case). A client that opens the link itself (with a link address set) gets the 360p mp4 through the server.
 - Some trailers are only on YouTube in 480p or lower; then that is what plays.
-- Emby keeps what it learned about a trailer the first time it played it (size, bitrate). After an update from 360p, or after changing Quality, use **Remove all links** and **Create links now** so Emby looks at the trailers afresh.
+- Emby keeps what it learned about a trailer the first time it played it. A trailer it first played as the 360p mp4 (links from version 0.1, Quality set to 360p at the time, or YouTube's HLS failing on that first play) stays 360p. To give those trailers a fresh start: **Remove all links**, run a library scan, then **Create links now**.
 - The first play of a trailer takes a few seconds while yt-dlp looks it up; later plays are cached.
 - Titles in shared or flat folders (several movies in one folder) are skipped.
 - The play link only works for Emby itself (and, with a link address set, the local network), and only for titles in the library.
