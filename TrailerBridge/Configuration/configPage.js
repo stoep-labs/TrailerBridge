@@ -1,6 +1,10 @@
 define(['emby-input', 'emby-button', 'emby-checkbox'], function () {
     'use strict';
 
+    // The Emby Forum thread for TrailerBridge (the footer's Emby Forum link).
+    var FORUM_URL = 'https://emby.media/community/forum/46-plugins/';
+    var GITHUB_REPO = 'stoep-labs/TrailerBridge';
+
     var pluginId = '7c1d4b9e-2f63-4a85-b0e7-91d3c5a6f248';
 
     function esc(s) {
@@ -31,6 +35,32 @@ define(['emby-input', 'emby-button', 'emby-checkbox'], function () {
         var drawer = document.querySelector('.mainDrawer');
         var right = drawer ? drawer.getBoundingClientRect().right : 0;
         view.style.setProperty('--tb-footer-left', (right > 0 && right < window.innerWidth * 0.5 ? right : 0) + 'px');
+    }
+
+    // Footer: the installed version, and a newer release on GitHub (nothing shown when GitHub can't be read).
+    function loadFooter(view) {
+        view.querySelector('#tbForumLink').href = FORUM_URL;
+        window.ApiClient.getInstalledPlugins().then(function (plugins) {
+            var me = (plugins || []).filter(function (p) { return (p.Id || '').toLowerCase() === pluginId; })[0];
+            var ver = (me && me.Version) || '';
+            if (!ver) return;
+            view.querySelector('.tb-version').textContent = 'TrailerBridge v' + ver;
+            view.querySelector('#tbFooterVersion').innerHTML = '<a href="https://github.com/' + GITHUB_REPO + '/releases/tag/v' + esc(ver) + '" target="_blank" style="color:inherit;text-decoration:none;">v' + esc(ver) + '</a>';
+            fetch('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest')
+                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+                .then(function (release) {
+                    var latest = (release.tag_name || '').replace(/^v/i, '');
+                    if (!latest) return;
+                    var a = latest.split('.').map(Number), b = ver.split('.').map(Number), newer = false;
+                    for (var i = 0; i < Math.max(a.length, b.length); i++) {
+                        if ((a[i] || 0) > (b[i] || 0)) { newer = true; break; }
+                        if ((a[i] || 0) < (b[i] || 0)) break;
+                    }
+                    if (!newer) return;
+                    view.querySelector('#tbFooterUpdateSep').style.display = '';
+                    view.querySelector('#tbFooterUpdateInfo').innerHTML = '<a class="footer-update-link" href="' + esc(release.html_url || 'https://github.com/' + GITHUB_REPO + '/releases') + '" target="_blank">Update available: v' + esc(latest) + '</a>';
+                }).catch(function () { });
+        }).catch(function () { });
     }
 
     function msg(view, id, text, error) {
@@ -107,12 +137,9 @@ define(['emby-input', 'emby-button', 'emby-checkbox'], function () {
             if (!view.dataset.tbInit) {
                 view.dataset.tbInit = '1';
                 bind(view);
+                window.addEventListener('resize', function () { if (view.isConnected && view.offsetParent !== null) applyTheme(view); });
             }
-            window.ApiClient.getInstalledPlugins().then(function (plugins) {
-                var me = (plugins || []).filter(function (p) { return (p.Id || '').toLowerCase() === pluginId; })[0];
-                view.querySelector('#tbFooterVersion').textContent = me && me.Version ? 'v' + me.Version : '';
-                if (me && me.Version) view.querySelector('.tb-version').textContent = 'TrailerBridge v' + me.Version;
-            }).catch(function () { });
+            loadFooter(view);
             loadConfig(view).then(function () { return loadStatus(view); });
         });
     };
