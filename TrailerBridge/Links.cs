@@ -78,8 +78,39 @@ namespace TrailerBridge
             catch (Exception ex) { Log.Warn("links.json: " + ex.Message); }
         }
 
+        // The ".m3u8" at the end is for Emby, not for us: Emby never offers direct streaming of an http link
+        // with ".m3u" in it. Direct streaming passes the link's response on to the client as is, and a client
+        // can't play YouTube's playlist (its URLs are bound to this server's address). Without it, every
+        // client goes through Emby's own ffmpeg (video copied), which plays the trailer.
         internal static string PlayUrl(BaseItem item) =>
-            "http://" + LinkHost() + ":" + Host.HttpPort + "/emby" + Marker + item.InternalId + "?k=" + Plugin.Instance.Key;
+            "http://" + LinkHost() + ":" + Host.HttpPort + "/emby" + Marker + item.InternalId + "?k=" + Plugin.Instance.Key + HlsHint;
+
+        private const string HlsHint = "&f=.m3u8";
+
+        /// <summary>
+        /// Adds the ".m3u8" to link files made before it was there, so direct streaming stops at once and not
+        /// only after the next link task. Emby reads a link file when it plays it: no library refresh needed.
+        /// </summary>
+        internal static void AddHlsHint()
+        {
+            lock (RunLock)
+            {
+                var n = 0;
+                foreach (var f in Load().Files)
+                {
+                    try
+                    {
+                        if (!File.Exists(f) || !IsBridgeFile(f)) continue;
+                        var content = File.ReadAllText(f).Trim();
+                        if (content.Contains(HlsHint)) continue;
+                        File.WriteAllText(f, content + HlsHint);
+                        n++;
+                    }
+                    catch (Exception ex) { Log.Warn("Link " + f + ": " + ex.Message); }
+                }
+                if (n > 0) Log.Info(n + " trailer links now keep clients off direct streaming.");
+            }
+        }
 
         private static string LinkHost()
         {

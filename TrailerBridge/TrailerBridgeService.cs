@@ -1,4 +1,3 @@
-using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
@@ -77,23 +76,36 @@ namespace TrailerBridge
 
         public async Task<object> Get(PlayRequest request)
         {
+            try
+            {
+                return await Play(request).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Play " + request.Id + ": " + ex.Message);
+                return new StatusWriter(502);
+            }
+        }
+
+        private async Task<object> Play(PlayRequest request)
+        {
             var config = Plugin.Instance.Configuration;
             var ip = Request.RemoteIp;
             var ua = Request.Headers["User-Agent"] ?? "";
             var range = Request.Headers["Range"] ?? "";
             Log.Info("Play " + request.Id + " from " + ip + " (" + ua + ")" + (range.Length > 0 ? " Range: " + range : ""));
 
-            if (!config.Enabled || !long.TryParse(request.Id, out var itemId)) throw new ResourceNotFoundException();
-            if (!KeyMatches(request.K, Plugin.Instance.Key)) throw new SecurityException("Wrong key");
+            if (!config.Enabled || !long.TryParse(request.Id, out var itemId)) return Refuse(404, request.Id, "TrailerBridge is off or the id is not a number");
+            if (!KeyMatches(request.K, Plugin.Instance.Key)) return Refuse(403, request.Id, "wrong key");
             var forwarded = !string.IsNullOrEmpty(Request.Headers["X-Forwarded-For"]);
             var loopback = ip != null && IPAddress.IsLoopback(ip) && !forwarded;
             // With a LAN link address, a client on the local network that plays the link itself is let in too.
             var lan = !loopback && !forwarded && ip != null && !string.IsNullOrWhiteSpace(config.LinkHost) && IsPrivate(ip);
-            if (!loopback && !lan) throw new SecurityException("Trailer links only play on the server or the local network");
+            if (!loopback && !lan) return Refuse(403, request.Id, "trailer links only play on the server or the local network");
 
             var item = Links.LibraryManager.GetItemById(itemId);
             var videoId = item == null ? null : Links.YouTubeId(item);
-            if (videoId == null) throw new ResourceNotFoundException();
+            if (videoId == null) return Refuse(404, request.Id, "no such item or no YouTube trailer");
 
             var head = string.Equals(Request.Verb, "HEAD", StringComparison.OrdinalIgnoreCase);
             // Emby's ffmpeg on this machine gets the HLS playlist (it fetches the segments from YouTube itself)
@@ -108,11 +120,13 @@ namespace TrailerBridge
             {
                 var source = await Resolver.GetAsync(videoId, config.Quality, CancellationToken.None).ConfigureAwait(false);
                 if (source.Playlist == null) return _results.GetRedirectResult(source.Url);
-                // Only ffmpeg gets the playlist. Emby's direct play passes the link's response on to the client
-                // as is, and a client can't load YouTube's segments (bound to this server's address); an mp4
-                // instead would play there at 360p. Refused, the client falls back to Emby's own stream
-                // (ffmpeg, video copied). The User-Agent only picks the answer; the checks above decide access.
-                if (!ua.StartsWith("Lavf/", StringComparison.Ordinal)) throw new ResourceNotFoundException();
+                // Only ffmpeg gets the playlist. Emby's direct streaming passes the link's response on to the
+                // client as is, and a client can't load YouTube's segments (bound to this server's address).
+                // The link's ".m3u8" keeps Emby from offering direct streaming (see Links.PlayUrl); a link file
+                // from before that still gets here. The User-Agent only picks the answer; the checks above
+                // decide access.
+                if (!ua.StartsWith("Lavf/", StringComparison.Ordinal))
+                    return Refuse(404, request.Id, "the HLS playlist is only for Emby's ffmpeg (an old link file without .m3u8: the link task rewrites it)");
                 return new PlaylistWriter(source.Playlist, head);
             }
             var url = await Resolver.GetUrlAsync(videoId, CancellationToken.None).ConfigureAwait(false);
@@ -121,6 +135,12 @@ namespace TrailerBridge
         }
 
         public Task<object> Head(PlayRequest request) => Get(request);
+
+        private static object Refuse(int status, string id, string why)
+        {
+            Log.Warn("Play " + id + " refused (" + status + "): " + why);
+            return new StatusWriter(status);
+        }
 
         public async Task<object> Get(StatusRequest request)
         {
@@ -173,6 +193,20 @@ namespace TrailerBridge
             var diff = 0;
             for (var i = 0; i < given.Length; i++) diff |= given[i] ^ expected[i];
             return diff == 0;
+        }
+    }
+
+    /// <summary>An empty answer with just a status code (no exception, so Emby logs no error).</summary>
+    internal sealed class StatusWriter : IAsyncStreamWriter
+    {
+        private readonly int _status;
+
+        internal StatusWriter(int status) => _status = status;
+
+        public Task WriteToAsync(IResponse response, CancellationToken ct)
+        {
+            response.StatusCode = _status;
+            return Task.CompletedTask;
         }
     }
 

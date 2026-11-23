@@ -2,7 +2,7 @@
 
 An Emby Server plugin that makes YouTube trailers play on clients that can't open YouTube links (older TV apps hang on a remote trailer).
 
-For every movie with a YouTube trailer and no local trailer, TrailerBridge writes a tiny `.strm` link into the title's `trailers/` folder. Emby treats it as a local trailer. When it's played, the plugin resolves the YouTube video with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and hands Emby's ffmpeg YouTube's HLS stream (one video variant and its audio). Emby streams it through its normal pipeline (direct stream, remux or transcode), with seeking. Nothing is downloaded or stored.
+For every movie with a YouTube trailer and no local trailer, TrailerBridge writes a tiny `.strm` link into the title's `trailers/` folder. Emby treats it as a local trailer. When it's played, the plugin resolves the YouTube video with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and hands Emby's ffmpeg YouTube's HLS stream (one video variant and its audio). Emby always plays it through its own ffmpeg (remux, or transcode when the client needs it), with seeking: the link keeps Emby from offering direct streaming, which would hand the client YouTube URLs it can't open. Nothing is downloaded or stored.
 
 ## Install
 Download `TrailerBridge.dll` from the [latest release](../../releases/latest), put it in Emby's `plugins` folder and restart Emby. Or install it with a GitHub repo plugin installer.

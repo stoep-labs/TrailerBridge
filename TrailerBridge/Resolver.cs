@@ -113,12 +113,9 @@ namespace TrailerBridge
                 if (m.Success && Hls.IsManifestUrl(m.Value)) master = m.Value;
             }
 
-            // YouTube only serves the URLs from "available_at" on (a few seconds after they are handed out).
-            if (long.TryParse(fields[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var availableAt) && availableAt > 0)
-            {
-                var wait = DateTimeOffset.FromUnixTimeSeconds(availableAt) - DateTimeOffset.UtcNow;
-                if (wait > TimeSpan.Zero && wait < TimeSpan.FromSeconds(30)) await Task.Delay(wait, ct).ConfigureAwait(false);
-            }
+            // YouTube serves the HLS playlists and segments at once; only the progressive mp4 answers 403 until
+            // "available_at" (a few seconds after it is handed out), so only the mp4 path waits (WaitUntilLiveAsync).
+            long.TryParse(fields[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var availableAt);
 
             var chosen = "";
             if (master != null)
@@ -137,7 +134,7 @@ namespace TrailerBridge
             if (r.Playlist == null)
             {
                 if (r.Url.Length == 0) throw new InvalidOperationException("YouTube has no playable format for " + videoId);
-                await WaitUntilLiveAsync(r.Url, ct).ConfigureAwait(false);
+                await WaitUntilLiveAsync(r.Url, availableAt, ct).ConfigureAwait(false);
                 chosen = "progressive 360p" + (quality > 360 ? " (no HLS up to " + quality + "p)" : "");
             }
 
@@ -158,16 +155,18 @@ namespace TrailerBridge
             var master = await GetTextAsync(masterUrl, ct).ConfigureAwait(false);
             foreach (var v in Hls.Candidates(master ?? "", quality).Take(3))
             {
-                var ok = true;
-                foreach (var u in new[] { v.Uri }.Concat(v.AudioUris))
-                {
-                    var media = await GetTextAsync(u, ct).ConfigureAwait(false);
-                    var segment = media == null ? null : Hls.FirstSegment(media);
-                    if (segment == null || !await AnswersAsync(segment, ct).ConfigureAwait(false)) { ok = false; break; }
-                }
-                if (ok) return v;
+                // The video and audio playlists (and their first segments) are checked side by side.
+                var checks = await Task.WhenAll(new[] { v.Uri }.Concat(v.AudioUris).Select(u => PlaysAsync(u, ct))).ConfigureAwait(false);
+                if (checks.All(ok => ok)) return v;
             }
             return null;
+        }
+
+        private static async Task<bool> PlaysAsync(string mediaUrl, CancellationToken ct)
+        {
+            var media = await GetTextAsync(mediaUrl, ct).ConfigureAwait(false);
+            var segment = media == null ? null : Hls.FirstSegment(media);
+            return segment != null && await AnswersAsync(segment, ct).ConfigureAwait(false);
         }
 
         private static async Task<bool> AnswersAsync(string url, CancellationToken ct)
@@ -188,9 +187,14 @@ namespace TrailerBridge
 
         private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
-        /// <summary>A one-byte ranged GET until it answers 206 (or 15 s pass).</summary>
-        private static async Task WaitUntilLiveAsync(string url, CancellationToken ct)
+        /// <summary>Waits for "available_at", then a one-byte ranged GET until it answers 206 (or 15 s pass).</summary>
+        private static async Task WaitUntilLiveAsync(string url, long availableAt, CancellationToken ct)
         {
+            if (availableAt > 0)
+            {
+                var wait = DateTimeOffset.FromUnixTimeSeconds(availableAt) - DateTimeOffset.UtcNow;
+                if (wait > TimeSpan.Zero && wait < TimeSpan.FromSeconds(30)) await Task.Delay(wait, ct).ConfigureAwait(false);
+            }
             var until = DateTime.UtcNow.AddSeconds(15);
             HttpStatusCode last = 0;
             while (true)

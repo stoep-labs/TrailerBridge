@@ -57,11 +57,13 @@ namespace TrailerBridge
                 try
                 {
                     await Task.Delay(FirstRunDelay).ConfigureAwait(false);
-                    if (Plugin.Instance.Configuration.Enabled && Links.NeverRan)
+                    if (!Plugin.Instance.Configuration.Enabled) return;
+                    if (Links.NeverRan)
                     {
                         Log.Info("First run: creating trailer links.");
                         Links.Update(CancellationToken.None);
                     }
+                    else Links.AddHlsHint();
                 }
                 catch (Exception ex) { Log.Warn("First run: " + ex.Message); }
             });
