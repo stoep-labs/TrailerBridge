@@ -40,7 +40,8 @@ namespace TrailerBridge
                 RequiresOpening = false,
                 RequiresClosing = false,
                 RunTimeTicks = r.Duration > 0 ? (long)(r.Duration * TimeSpan.TicksPerSecond) : (long?)null,
-                Bitrate = v != null && v.Bandwidth > 0 ? (int)Math.Min(v.Bandwidth, int.MaxValue) : 1000000,
+                // The 360p mp4 (itag 18) is about 0.5 Mbit/s. Without a bitrate Emby does not copy the video.
+                Bitrate = v != null && v.Bandwidth > 0 ? (int)Math.Min(v.Bandwidth, int.MaxValue) : 600000,
                 MediaStreams = new List<MediaStream>
                 {
                     new MediaStream
@@ -48,7 +49,7 @@ namespace TrailerBridge
                         Type = MediaStreamType.Video, Index = 0,
                         Codec = v?.VideoCodec ?? "h264",
                         Width = v?.Width ?? 640, Height = v?.Height ?? 360,
-                        BitRate = v != null && v.Bandwidth > 0 ? (int)Math.Min(v.Bandwidth, int.MaxValue) : (int?)null,
+                        BitRate = v != null && v.Bandwidth > 0 ? (int)Math.Min(v.Bandwidth, int.MaxValue) : 500000,
                         IsDefault = true
                     },
                     new MediaStream
@@ -64,8 +65,11 @@ namespace TrailerBridge
             return new List<MediaSourceInfo> { source };
         }
 
-        // Sources are never opened.
+        // Sources are never opened. Emby 4.9 and 4.10 differ in this signature; with both the type loads on either.
         public Task<ILiveStream> OpenMediaSource(string openToken, string consumerId, List<ILiveStream> currentLiveStreams,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public virtual Task<ILiveStream> OpenMediaSource(string openToken, List<ILiveStream> currentLiveStreams,
             CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

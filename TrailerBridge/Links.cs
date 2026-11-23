@@ -284,7 +284,9 @@ namespace TrailerBridge
             lock (RunLock)
             {
                 if (!Plugin.Instance.Configuration.Enabled) return;
-                var titles = Titles(ids);
+                // Titles whose trailers are already right (only our row, for this video) need nothing: a metadata
+                // refresh of a linked title costs one extras lookup, not a pass over the library.
+                var titles = Titles(ids).Where(t => !IsLinked(t)).ToList();
                 if (titles.Count == 0) return;
                 // The other versions of these titles too, so a group is judged whole.
                 var keys = new HashSet<string>(titles.Select(t => t.PresentationUniqueKey ?? ""), StringComparer.Ordinal);
@@ -300,6 +302,16 @@ namespace TrailerBridge
                 if (outcome.Created + outcome.Updated + outcome.Removed > 0)
                     Log.Info("New titles: " + outcome.Created + " linked, " + outcome.Updated + " changed, " + outcome.Removed + " removed.");
             }
+        }
+
+        private static bool IsLinked(BaseItem title)
+        {
+            try
+            {
+                var extras = title.GetExtras(TrailerTypes);
+                return extras.Length == 1 && RowVideoId(extras[0]) != null && RowVideoId(extras[0]) == YouTubeId(title);
+            }
+            catch { return false; }
         }
 
         /// <summary>True when the link task has never run here (no links.json yet).</summary>
