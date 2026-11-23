@@ -136,6 +136,7 @@ namespace TrailerBridge
             var path = Locate();
             if (path == null) return "";
             var r = await RunAsync(path, "--version", TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            if (r.Exit != 0) Log.Warn("yt-dlp at " + path + " does not run (" + r.Exit + "): " + (r.Err ?? "").Trim());
             return r.Exit == 0 ? r.Out.Trim() : "";
         }
 
@@ -227,6 +228,14 @@ namespace TrailerBridge
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
+            // Emby on Linux runs with LD_LIBRARY_PATH pointing at its own bundled libraries (an older
+            // libc among them). A child process inherits it, and yt-dlp/deno built against the system
+            // libc then fail to start ("GLIBC_2.38 not found"). They get the system libraries instead.
+            if (!IsWindows)
+            {
+                psi.Environment.Remove("LD_LIBRARY_PATH");
+                psi.Environment.Remove("LD_PRELOAD");
+            }
             using (var p = new Process { StartInfo = psi, EnableRaisingEvents = true })
             {
                 var done = new TaskCompletionSource<bool>();
