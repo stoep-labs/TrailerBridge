@@ -136,14 +136,7 @@ namespace TrailerBridge
                 var files = new List<string>();
                 var items = Candidates().ToList();
 
-                // Folders with more than one title in them (a flat folder of movies): a trailers folder
-                // there would belong to all of them. Versions of one movie share a folder and a name.
-                var shared = new HashSet<string>(
-                    items.Where(i => i is not MediaBrowser.Controller.Entities.TV.Series && !string.IsNullOrEmpty(i.ContainingFolderPath))
-                         .GroupBy(i => i.ContainingFolderPath, StringComparer.OrdinalIgnoreCase)
-                         .Where(g => g.Select(i => (i.Name ?? "") + "|" + i.ProductionYear).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
-                         .Select(g => g.Key),
-                    StringComparer.OrdinalIgnoreCase);
+                var shared = SharedFolders(items);
                 var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var item in items)
@@ -151,44 +144,8 @@ namespace TrailerBridge
                     ct.ThrowIfCancellationRequested();
                     var folder = item.ContainingFolderPath;
                     if (string.IsNullOrEmpty(folder) || !done.Add(folder)) continue;
-                    try
-                    {
-                        if (!Directory.Exists(folder)) continue;
-                        var trailers = Path.Combine(folder, TrailersFolder);
-                        var link = LinkPath(folder);
-                        var bridges = Directory.Exists(trailers)
-                            ? Directory.GetFiles(trailers, "*" + Suffix).Where(IsBridgeFile).ToList()
-                            : new List<string>();
-
-                        var mixed = (item as Video)?.IsInMixedFolder == true || shared.Contains(folder);
-                        var want = !mixed && YouTubeId(item) != null && !HasOwnTrailer(item, folder, trailers);
-                        if (mixed && YouTubeId(item) != null) outcome.SharedFolder++;
-
-                        foreach (var b in bridges.Where(b => !want || !string.Equals(b, link, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            File.Delete(b);
-                            outcome.Removed++;
-                            RemoveFolderIfEmpty(trailers);
-                            LibraryMonitor.ReportFileSystemChanged(Directory.Exists(trailers) ? trailers : folder);
-                        }
-                        if (!want) continue;
-
-                        var content = PlayUrl(item);
-                        var existing = File.Exists(link) ? File.ReadAllText(link) : null;
-                        if (existing != content)
-                        {
-                            Directory.CreateDirectory(trailers);
-                            File.WriteAllText(link, content);
-                            if (existing == null) outcome.Created++; else outcome.Updated++;
-                            LibraryMonitor.ReportFileSystemChanged(trailers);
-                        }
-                        files.Add(link);
-                    }
-                    catch (Exception ex)
-                    {
-                        outcome.Failed++;
-                        Log.Warn("Link for " + item.Name + " (" + folder + "): " + ex.Message);
-                    }
+                    var link = LinkFolder(item, folder, shared, outcome);
+                    if (link != null) files.Add(link);
                 }
 
                 outcome.Linked = files.Count;
@@ -200,6 +157,103 @@ namespace TrailerBridge
                 return outcome;
             }
         }
+
+        /// <summary>
+        /// Folders with more than one title in them (a flat folder of movies): a trailers folder there would
+        /// belong to all of them. Versions of one movie share a folder and a name.
+        /// </summary>
+        private static HashSet<string> SharedFolders(List<BaseItem> items) =>
+            new HashSet<string>(
+                items.Where(i => i is not MediaBrowser.Controller.Entities.TV.Series && !string.IsNullOrEmpty(i.ContainingFolderPath))
+                     .GroupBy(i => i.ContainingFolderPath, StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Select(i => (i.Name ?? "") + "|" + i.ProductionYear).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+                     .Select(g => g.Key),
+                StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Makes one folder's link files match the rules; returns the link that is there now, or null.</summary>
+        private static string? LinkFolder(BaseItem item, string folder, HashSet<string> shared, Outcome outcome)
+        {
+            try
+            {
+                if (!Directory.Exists(folder)) return null;
+                var trailers = Path.Combine(folder, TrailersFolder);
+                var link = LinkPath(folder);
+                var bridges = Directory.Exists(trailers)
+                    ? Directory.GetFiles(trailers, "*" + Suffix).Where(IsBridgeFile).ToList()
+                    : new List<string>();
+
+                var mixed = (item as Video)?.IsInMixedFolder == true || shared.Contains(folder);
+                var want = !mixed && YouTubeId(item) != null && !HasOwnTrailer(item, folder, trailers);
+                if (mixed && YouTubeId(item) != null) outcome.SharedFolder++;
+
+                foreach (var b in bridges.Where(b => !want || !string.Equals(b, link, StringComparison.OrdinalIgnoreCase)))
+                {
+                    File.Delete(b);
+                    outcome.Removed++;
+                    RemoveFolderIfEmpty(trailers);
+                    LibraryMonitor.ReportFileSystemChanged(Directory.Exists(trailers) ? trailers : folder);
+                }
+                if (!want) return null;
+
+                var content = PlayUrl(item);
+                var existing = File.Exists(link) ? File.ReadAllText(link) : null;
+                if (existing != content)
+                {
+                    Directory.CreateDirectory(trailers);
+                    File.WriteAllText(link, content);
+                    if (existing == null) outcome.Created++; else outcome.Updated++;
+                    LibraryMonitor.ReportFileSystemChanged(trailers);
+                }
+                return link;
+            }
+            catch (Exception ex)
+            {
+                outcome.Failed++;
+                Log.Warn("Link for " + item.Name + " (" + folder + "): " + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// New titles (from the library events): makes the link for each one that has a YouTube trailer and no
+        /// link yet. Titles that already have their link are left alone, so the folder refresh our own write
+        /// causes does nothing.
+        /// </summary>
+        internal static void LinkNew(IEnumerable<long> ids)
+        {
+            lock (RunLock)
+            {
+                if (!Plugin.Instance.Configuration.Enabled) return;
+                var todo = ids.Select(id => LibraryManager.GetItemById(id))
+                              .Where(i => i != null && YouTubeId(i) != null && !string.IsNullOrEmpty(i.ContainingFolderPath)
+                                          && !File.Exists(LinkPath(i.ContainingFolderPath)))
+                              .GroupBy(i => i.ContainingFolderPath, StringComparer.OrdinalIgnoreCase)
+                              .Select(g => g.First())
+                              .ToList();
+                if (todo.Count == 0) return;
+
+                var shared = SharedFolders(Candidates().ToList());
+                var outcome = new Outcome();
+                var made = new List<string>();
+                foreach (var item in todo)
+                {
+                    var before = outcome.Created;
+                    var link = LinkFolder(item, item.ContainingFolderPath, shared, outcome);
+                    if (link != null && outcome.Created > before)
+                    {
+                        made.Add(link);
+                        Log.Info("Linked new title " + item.Name + ".");
+                    }
+                }
+                if (made.Count == 0) return;
+                var state = Load();
+                state.Files = state.Files.Union(made, StringComparer.OrdinalIgnoreCase).ToList();
+                Save(state);
+            }
+        }
+
+        /// <summary>True when the link task has never run here (no links.json yet).</summary>
+        internal static bool NeverRan => Load().Last == null;
 
         internal static Outcome RemoveAll()
         {

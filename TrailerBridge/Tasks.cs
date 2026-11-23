@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace TrailerBridge
 {
-    /// <summary>Creates and removes the link files (daily and at startup unless changed under Scheduled Tasks).</summary>
+    /// <summary>Creates and removes the link files (daily unless changed under Scheduled Tasks; new titles are linked as they arrive, see NewTitles).</summary>
     public class UpdateLinksTask : IScheduledTask
     {
         public UpdateLinksTask(ILogManager logManager, ILibraryManager libraryManager, ILibraryMonitor libraryMonitor,
