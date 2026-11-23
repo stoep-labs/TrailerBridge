@@ -15,8 +15,8 @@ namespace TrailerBridge
 {
     // ---- Requests ----
 
-    // Called by Emby's own ffprobe / ffmpeg with the URL in a link file: no Emby token, so it checks
-    // the plugin key, a loopback caller, and only plays the YouTube trailer of an item in the library.
+    // Called by Emby's own ffmpeg with the source URL of a trailer row: no Emby token, so it checks the
+    // plugin key, a loopback caller, and only plays the YouTube trailer of an item in the library.
     [Route("/TrailerBridge/Play/{Id}", "GET")]
     [Route("/TrailerBridge/Play/{Id}", "HEAD")]
     [Unauthenticated]
@@ -99,38 +99,26 @@ namespace TrailerBridge
             if (!KeyMatches(request.K, Plugin.Instance.Key)) return Refuse(403, request.Id, "wrong key");
             var forwarded = !string.IsNullOrEmpty(Request.Headers["X-Forwarded-For"]);
             var loopback = ip != null && IPAddress.IsLoopback(ip) && !forwarded;
-            // With a LAN link address, a client on the local network that plays the link itself is let in too.
-            var lan = !loopback && !forwarded && ip != null && !string.IsNullOrWhiteSpace(config.LinkHost) && IsPrivate(ip);
-            if (!loopback && !lan) return Refuse(403, request.Id, "trailer links only play on the server or the local network");
+            if (!loopback) return Refuse(403, request.Id, "trailers only play through the server");
 
+            // A trailer row (its source), or a title (a link file of an earlier version, until it is removed).
             var item = Links.LibraryManager.GetItemById(itemId);
-            var videoId = item == null ? null : Links.YouTubeId(item);
-            if (videoId == null) return Refuse(404, request.Id, "no such item or no YouTube trailer");
+            var videoId = Links.RowVideoId(item) ?? (Links.IsTitle(item) ? Links.YouTubeId(item!) : null);
+            if (videoId == null) return Refuse(404, request.Id, "no such trailer or no YouTube trailer");
 
             var head = string.Equals(Request.Verb, "HEAD", StringComparison.OrdinalIgnoreCase);
-            // Emby's ffmpeg on this machine gets the HLS playlist (it fetches the segments from YouTube itself)
-            // or a redirect to the mp4. A client gets the mp4 bytes through the server: the URLs are tied to
-            // the server's address, and old TVs may not manage YouTube's TLS.
-            // A link Emby first saw as an mp4 (360p, or HLS failed that time) stays one: Emby then forces the mp4
-            // format on ffmpeg and a playlist would not play.
-            var probed = Links.ProbedContainer(item!);
-            if (probed != null && !string.Equals(probed, "hls", StringComparison.OrdinalIgnoreCase))
-                Log.Info("Trailer link of " + request.Id + " was first played as " + probed + ": it stays the single-file mp4");
-            if (loopback && !config.Proxy && (probed == null || string.Equals(probed, "hls", StringComparison.OrdinalIgnoreCase)))
+            // Emby's ffmpeg gets the HLS playlist (it fetches the segments from YouTube itself) or a redirect to
+            // the mp4; with Proxy on, the mp4 bytes through the plugin.
+            if (!config.Proxy)
             {
                 var source = await Resolver.GetAsync(videoId, config.Quality, CancellationToken.None).ConfigureAwait(false);
                 if (source.Playlist == null) return _results.GetRedirectResult(source.Url);
-                // Only ffmpeg gets the playlist. Emby's direct streaming passes the link's response on to the
-                // client as is, and a client can't load YouTube's segments (bound to this server's address).
-                // The link's ".m3u8" keeps Emby from offering direct streaming (see Links.PlayUrl); a link file
-                // from before that still gets here. The User-Agent only picks the answer; the checks above
-                // decide access.
+                // The User-Agent only picks the answer; the checks above decide access.
                 if (!ua.StartsWith("Lavf/", StringComparison.Ordinal))
-                    return Refuse(404, request.Id, "the HLS playlist is only for Emby's ffmpeg (an old link file without .m3u8: the link task rewrites it)");
+                    return Refuse(404, request.Id, "the HLS playlist is only for Emby's ffmpeg");
                 return new PlaylistWriter(source.Playlist, head);
             }
             var url = await Resolver.GetUrlAsync(videoId, CancellationToken.None).ConfigureAwait(false);
-            if (loopback && !config.Proxy) return _results.GetRedirectResult(url);
             return new ProxyWriter(videoId, url, range, head);
         }
 
@@ -146,6 +134,7 @@ namespace TrailerBridge
         {
             var path = YtDlp.Locate();
             var state = Links.Load();
+            var linked = Links.Count();
             var js = YtDlp.LocateJsRuntime();
             return new StatusResponse
             {
@@ -154,7 +143,7 @@ namespace TrailerBridge
                 YtDlpOwn = path != null && YtDlp.IsOwn(path),
                 YtDlpVersion = path == null ? "" : await YtDlp.VersionAsync(CancellationToken.None).ConfigureAwait(false),
                 JsRuntime = js == null ? "" : js.Value.Name + " (" + js.Value.Path + ")",
-                Linked = state.Files.Count,
+                Linked = linked,
                 LastMessage = state.Last?.Message ?? "",
                 LastRun = state.Last?.When
             };
@@ -175,15 +164,6 @@ namespace TrailerBridge
             {
                 return new MessageResponse { Message = ex.Message };
             }
-        }
-
-        private static bool IsPrivate(IPAddress ip)
-        {
-            if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
-            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-                return ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || (ip.GetAddressBytes()[0] & 0xFE) == 0xFC;
-            var b = ip.GetAddressBytes();
-            return b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254);
         }
 
         private static bool KeyMatches(string? given, string expected)

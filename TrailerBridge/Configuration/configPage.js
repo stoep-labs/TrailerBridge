@@ -85,7 +85,6 @@ define(['emby-input', 'emby-button', 'emby-checkbox'], function () {
         return window.ApiClient.getPluginConfiguration(pluginId).then(function (c) {
             view.querySelector('#tbEnabled').checked = !!c.Enabled;
             view.querySelector('#tbYtDlpPath').value = c.YtDlpPath || '';
-            view.querySelector('#tbLinkHost').value = c.LinkHost || '';
             var q = c.Quality >= 1080 ? '1080' : c.Quality >= 720 ? '720' : '360';
             view.querySelector('#tbQuality').value = q;
         });
@@ -118,7 +117,6 @@ define(['emby-input', 'emby-button', 'emby-checkbox'], function () {
             window.ApiClient.getPluginConfiguration(pluginId).then(function (c) {
                 c.Enabled = view.querySelector('#tbEnabled').checked;
                 c.YtDlpPath = view.querySelector('#tbYtDlpPath').value.trim();
-                c.LinkHost = view.querySelector('#tbLinkHost').value.trim();
                 c.Quality = parseInt(view.querySelector('#tbQuality').value, 10);
                 return window.ApiClient.updatePluginConfiguration(pluginId, c);
             }).then(function () {

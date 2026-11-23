@@ -1,10 +1,13 @@
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Serialization;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -12,19 +15,22 @@ using System.Threading;
 namespace TrailerBridge
 {
     /// <summary>
-    /// The link files: "trailers/&lt;folder name&gt; - TrailerBridge.strm" in the folder of every movie and
-    /// series that has a YouTube trailer and no trailer of its own. Emby takes the file as a local trailer;
-    /// the URL in it is this server's play endpoint, which Emby's own ffmpeg calls when the trailer plays.
+    /// The trailer rows: one local trailer without a file for every movie and series that has a YouTube trailer
+    /// and no trailer of its own. Emby lists it like a trailer in the title's folder; when it plays, Emby asks
+    /// <see cref="TrailerSource"/> for its source, which is this server's play endpoint.
     /// </summary>
     internal static class Links
     {
+        /// <summary>The provider id on every row: TrailerBridge=&lt;YouTube video id&gt;.</summary>
+        internal const string ProviderKey = "TrailerBridge";
+
+        // The link files of earlier versions ("trailers/<folder> - TrailerBridge.strm"): only removed now.
         internal const string Suffix = " - TrailerBridge.strm";
         internal const string Marker = "/TrailerBridge/Play/";
-        private const string TrailersFolder = "trailers";
-        private static readonly string[] VideoExtensions =
-        {
-            ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".flv", ".iso", ".strm", ".3gp", ".ogv", ".vob"
-        };
+
+        private static readonly ExtraType[] TrailerTypes = { ExtraType.Trailer };
+        // Between two rows written or two old link files removed, so a big library is done without a burst.
+        private static readonly TimeSpan Pace = TimeSpan.FromMilliseconds(20);
 
         private static readonly object RunLock = new object();
 
@@ -47,13 +53,13 @@ namespace TrailerBridge
             public int Created { get; set; }
             public int Updated { get; set; }
             public int Removed { get; set; }
-            public int SharedFolder { get; set; }
+            public int OldLinksRemoved { get; set; }
             public int Failed { get; set; }
             public string Message { get; set; } = "";
             public DateTime When { get; set; } = DateTime.UtcNow;
         }
 
-        /// <summary>The state the settings page shows: the links there are now, and the last run.</summary>
+        /// <summary>The last run, and the link files earlier versions wrote (removed on the first run of this one).</summary>
         public class State
         {
             public List<string> Files { get; set; } = new List<string>();
@@ -78,68 +84,23 @@ namespace TrailerBridge
             catch (Exception ex) { Log.Warn("links.json: " + ex.Message); }
         }
 
-        // The ".m3u8" at the end is for Emby, not for us: Emby never offers direct streaming of an http link
-        // with ".m3u" in it. Direct streaming passes the link's response on to the client as is, and a client
-        // can't play YouTube's playlist (its URLs are bound to this server's address). Without it, every
-        // client goes through Emby's own ffmpeg (video copied), which plays the trailer.
-        internal static string PlayUrl(BaseItem item) =>
-            "http://" + LinkHost() + ":" + Host.HttpPort + "/emby" + Marker + item.InternalId + "?k=" + Plugin.Instance.Key + HlsHint;
-
-        private const string HlsHint = "&f=.m3u8";
-
-        /// <summary>
-        /// Adds the ".m3u8" to link files made before it was there, so direct streaming stops at once and not
-        /// only after the next link task. Emby reads a link file when it plays it: no library refresh needed.
-        /// </summary>
-        internal static void AddHlsHint()
-        {
-            lock (RunLock)
-            {
-                var n = 0;
-                foreach (var f in Load().Files)
-                {
-                    try
-                    {
-                        if (!File.Exists(f) || !IsBridgeFile(f)) continue;
-                        var content = File.ReadAllText(f).Trim();
-                        if (content.Contains(HlsHint)) continue;
-                        File.WriteAllText(f, content + HlsHint);
-                        n++;
-                    }
-                    catch (Exception ex) { Log.Warn("Link " + f + ": " + ex.Message); }
-                }
-                if (n > 0) Log.Info(n + " trailer links now keep clients off direct streaming.");
-            }
-        }
-
-        private static string LinkHost()
-        {
-            var h = (Plugin.Instance.Configuration.LinkHost ?? "").Trim();
-            if (h.Length == 0) return "127.0.0.1";
-            return h.Contains(":") && !h.StartsWith("[") ? "[" + h + "]" : h;
-        }
-
-        /// <summary>The link file for a title in this folder.</summary>
-        private static string LinkPath(string folder) =>
-            Path.Combine(folder, TrailersFolder, Path.GetFileName(folder.TrimEnd('\\', '/')) + Suffix);
-
-        /// <summary>
-        /// The container Emby stored when it first probed the title's link ("hls", "mp4", ...), or null when it
-        /// has not played it yet. Emby keeps that first probe and later tells ffmpeg the format (-f mp4).
-        /// </summary>
-        internal static string? ProbedContainer(BaseItem item)
-        {
-            var folder = item.ContainingFolderPath;
-            if (string.IsNullOrEmpty(folder)) return null;
-            var trailer = LibraryManager.FindByPath(LinkPath(folder), false);
-            var container = trailer?.Container;
-            return string.IsNullOrEmpty(container) ? null : container;
-        }
+        /// <summary>The play endpoint on this server, for Emby's own ffmpeg only (clients get Emby's stream).</summary>
+        internal static string PlayUrl(BaseItem row) =>
+            "http://127.0.0.1:" + Host.HttpPort + "/emby" + Marker + row.InternalId + "?k=" + Plugin.Instance.Key;
 
         /// <summary>The YouTube video id of the item's first YouTube remote trailer.</summary>
         internal static string? YouTubeId(BaseItem item) =>
             (item.RemoteTrailers ?? Array.Empty<string>()).Select(Resolver.VideoId).FirstOrDefault(v => v != null);
 
+        /// <summary>The video id of one of our rows, or null for anything else.</summary>
+        internal static string? RowVideoId(BaseItem? item)
+        {
+            if (item is not Trailer || item.ExtraType != ExtraType.Trailer || !string.IsNullOrEmpty(item.Path)) return null;
+            var id = item.GetProviderId(ProviderKey);
+            return Resolver.IsVideoId(id) ? id : null;
+        }
+
+        /// <summary>An old link file (by name and content).</summary>
         internal static bool IsBridgeFile(string path) =>
             path.EndsWith(Suffix, StringComparison.OrdinalIgnoreCase) && ReadsAsOurs(path);
 
@@ -149,142 +110,208 @@ namespace TrailerBridge
             catch { return false; }
         }
 
-        private static IEnumerable<BaseItem> Candidates() =>
+        /// <summary>Movies and series, without the plugins' own copies (HSC and the like).</summary>
+        private static List<BaseItem> Titles(IEnumerable<long>? ids = null)
+        {
+            var items = ids == null
+                ? LibraryManager.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { nameof(Movie), nameof(Series) },
+                    Recursive = true,
+                    IsVirtualItem = false
+                })
+                : ids.Select(id => LibraryManager.GetItemById(id)).Where(i => i != null).ToArray();
+            return items.Where(IsTitle).ToList();
+        }
+
+        internal static bool IsTitle(BaseItem? item)
+        {
+            if (item is not Movie && item is not Series) return false;
+            if (item.ExtraType != null || item.IsVirtualItem) return false;
+            var path = item.Path ?? "";
+            return path.Length > 0 && !Plugin.Instance.SkipRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>All our rows.</summary>
+        internal static List<BaseItem> Rows() =>
             LibraryManager.GetItemList(new InternalItemsQuery
             {
-                IncludeItemTypes = new[] { "Movie", "Series" },
-                Recursive = true,
-                IsVirtualItem = false
-            });
+                IncludeItemTypes = new[] { nameof(Trailer) },
+                ExtraTypes = TrailerTypes,
+                HasAnyProviderId = new[] { ProviderKey },
+                Recursive = true
+            }).Where(i => RowVideoId(i) != null).ToList();
 
-        /// <summary>Creates, rewrites and removes link files so they match the library now.</summary>
+        internal static int Count()
+        {
+            try { return Rows().Count; }
+            catch (Exception ex) { Log.Warn("Counting rows: " + ex.Message); return 0; }
+        }
+
+        /// <summary>Trailers of the titles that are not ours: anything with a path that isn't an old link file.</summary>
+        private static HashSet<long> TitlesWithOwnTrailer()
+        {
+            var set = new HashSet<long>();
+            foreach (var t in LibraryManager.GetItemList(new InternalItemsQuery
+                     {
+                         IncludeItemTypes = new[] { nameof(Trailer), "Video", nameof(Movie) },
+                         ExtraTypes = TrailerTypes,
+                         Recursive = true
+                     }))
+            {
+                var p = t.Path ?? "";
+                if (p.Length == 0 || p.EndsWith(Suffix, StringComparison.OrdinalIgnoreCase)) continue;
+                if (t.ParentId != 0) set.Add(t.ParentId);
+            }
+            return set;
+        }
+
+        /// <summary>Makes the rows match the library: the link task, the settings page and the first run.</summary>
         internal static Outcome Update(CancellationToken ct)
         {
             lock (RunLock)
             {
                 if (!Plugin.Instance.Configuration.Enabled) return RemoveAllLocked("TrailerBridge is off: ");
+                var watch = Stopwatch.StartNew();
                 var outcome = new Outcome();
-                var files = new List<string>();
-                var items = Candidates().ToList();
-
-                var shared = SharedFolders(items);
-                var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (var item in items)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var folder = item.ContainingFolderPath;
-                    if (string.IsNullOrEmpty(folder) || !done.Add(folder)) continue;
-                    var link = LinkFolder(item, folder, shared, outcome);
-                    if (link != null) files.Add(link);
-                }
-
-                outcome.Linked = files.Count;
-                outcome.Message = outcome.Linked + " titles linked (" + outcome.Created + " new, " + outcome.Updated + " rewritten, " +
-                                  outcome.Removed + " removed" + (outcome.SharedFolder > 0 ? ", " + outcome.SharedFolder + " skipped in shared folders" : "") +
+                var rows = Rows();
+                var titles = Titles();
+                Sync(titles, rows, outcome, ct, removeOrphans: true);
+                var state = Load();
+                RemoveOldLinks(state, outcome, ct);
+                outcome.Linked = Count();
+                outcome.Message = outcome.Linked + " titles linked (" + outcome.Created + " new, " + outcome.Updated + " changed, " +
+                                  outcome.Removed + " removed" +
+                                  (outcome.OldLinksRemoved > 0 ? ", " + outcome.OldLinksRemoved + " old link files removed" : "") +
                                   (outcome.Failed > 0 ? ", " + outcome.Failed + " failed" : "") + ").";
-                Save(new State { Files = files, Last = outcome });
-                Log.Info(outcome.Message);
+                state.Files = new List<string>();
+                state.Last = outcome;
+                Save(state);
+                Log.Info(outcome.Message + " " + (int)watch.Elapsed.TotalSeconds + " s.");
                 return outcome;
             }
         }
 
         /// <summary>
-        /// Folders with more than one title in them (a flat folder of movies): a trailers folder there would
-        /// belong to all of them. Versions of one movie share a folder and a name.
+        /// Brings the rows of these titles in line. Versions of a title (separate items, one presentation key)
+        /// share their extras, so the group gets one row, on its first version.
         /// </summary>
-        private static HashSet<string> SharedFolders(List<BaseItem> items) =>
-            new HashSet<string>(
-                items.Where(i => i is not MediaBrowser.Controller.Entities.TV.Series && !string.IsNullOrEmpty(i.ContainingFolderPath))
-                     .GroupBy(i => i.ContainingFolderPath, StringComparer.OrdinalIgnoreCase)
-                     .Where(g => g.Select(i => (i.Name ?? "") + "|" + i.ProductionYear).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
-                     .Select(g => g.Key),
-                StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>Makes one folder's link files match the rules; returns the link that is there now, or null.</summary>
-        private static string? LinkFolder(BaseItem item, string folder, HashSet<string> shared, Outcome outcome)
+        private static void Sync(List<BaseItem> titles, List<BaseItem> rows, Outcome outcome, CancellationToken ct, bool removeOrphans)
         {
-            try
+            var own = TitlesWithOwnTrailer();
+            var rowsByParent = rows.GroupBy(r => r.ParentId).ToDictionary(g => g.Key, g => g.ToList());
+            var seen = new HashSet<long>();
+
+            foreach (var group in titles.GroupBy(t => t.PresentationUniqueKey ?? t.InternalId.ToString(), StringComparer.Ordinal))
             {
-                if (!Directory.Exists(folder)) return null;
-                var trailers = Path.Combine(folder, TrailersFolder);
-                var link = LinkPath(folder);
-                var bridges = Directory.Exists(trailers)
-                    ? Directory.GetFiles(trailers, "*" + Suffix).Where(IsBridgeFile).ToList()
-                    : new List<string>();
-
-                var mixed = (item as Video)?.IsInMixedFolder == true || shared.Contains(folder);
-                var want = !mixed && YouTubeId(item) != null && !HasOwnTrailer(item, folder, trailers);
-                if (mixed && YouTubeId(item) != null) outcome.SharedFolder++;
-
-                foreach (var b in bridges.Where(b => !want || !string.Equals(b, link, StringComparison.OrdinalIgnoreCase)))
+                ct.ThrowIfCancellationRequested();
+                var versions = group.OrderBy(t => t.InternalId).ToList();
+                foreach (var v in versions) seen.Add(v.InternalId);
+                try
                 {
-                    File.Delete(b);
-                    outcome.Removed++;
-                    RemoveFolderIfEmpty(trailers);
-                    LibraryMonitor.ReportFileSystemChanged(Directory.Exists(trailers) ? trailers : folder);
+                    var videoId = versions.Select(YouTubeId).FirstOrDefault(v => v != null);
+                    var want = videoId != null && !versions.Any(v => own.Contains(v.InternalId));
+                    // The version that already has the row keeps it; else the first one.
+                    var owner = versions.FirstOrDefault(v => rowsByParent.ContainsKey(v.InternalId)) ?? versions[0];
+                    var keep = false;
+                    foreach (var v in versions)
+                    {
+                        if (!rowsByParent.TryGetValue(v.InternalId, out var mine)) continue;
+                        foreach (var row in mine)
+                        {
+                            if (want && v == owner && !keep && RowVideoId(row) == videoId) { keep = true; continue; }
+                            Delete(row, v);
+                            outcome.Removed++;
+                        }
+                    }
+                    if (want && !keep)
+                    {
+                        Create(owner, videoId!);
+                        if (rowsByParent.ContainsKey(owner.InternalId)) { outcome.Updated++; outcome.Removed--; }
+                        else outcome.Created++;
+                        Thread.Sleep(Pace);
+                    }
                 }
-                if (!want) return null;
-
-                var content = PlayUrl(item);
-                var existing = File.Exists(link) ? File.ReadAllText(link) : null;
-                if (existing != content)
+                catch (Exception ex)
                 {
-                    Directory.CreateDirectory(trailers);
-                    File.WriteAllText(link, content);
-                    if (existing == null) outcome.Created++; else outcome.Updated++;
-                    LibraryMonitor.ReportFileSystemChanged(trailers);
+                    outcome.Failed++;
+                    Log.Warn("Trailer of " + group.First().Name + ": " + ex.Message);
                 }
-                return link;
             }
-            catch (Exception ex)
+
+            if (!removeOrphans) return;
+            // Rows whose title is gone, or is one of the skipped copies.
+            foreach (var row in rows.Where(r => !seen.Contains(r.ParentId)))
             {
-                outcome.Failed++;
-                Log.Warn("Link for " + item.Name + " (" + folder + "): " + ex.Message);
-                return null;
+                try
+                {
+                    Delete(row, null);
+                    outcome.Removed++;
+                }
+                catch (Exception ex) { outcome.Failed++; Log.Warn("Remove row " + row.InternalId + ": " + ex.Message); }
             }
         }
 
+        private static void Create(BaseItem owner, string videoId)
+        {
+            var row = new Trailer
+            {
+                // Per title and video: the same video under two titles must not share one item or its user data.
+                // GetNewItemIdFromName keeps the case, and YouTube ids differ by case.
+                Id = LibraryManager.GetNewItemIdFromName(ProviderKey + "|" + owner.Id.ToString("N") + "|" + videoId, typeof(Trailer)),
+                Name = owner.Name + " – Trailer",
+                ExtraType = ExtraType.Trailer,
+                IsLocked = true,
+                DateCreated = DateTimeOffset.UtcNow
+            };
+            row.SetProviderId(ProviderKey, videoId);
+            row.SetParent(owner);
+            LibraryManager.CreateItems(new List<BaseItem> { row }, owner, null, LibraryManager.GetCollectionFolders(owner),
+                false, CancellationToken.None);
+        }
+
+        private static void Delete(BaseItem row, BaseItem? owner)
+        {
+            LibraryManager.DeleteItem(row, new DeleteOptions { DeleteFileLocation = false, DeleteFromExternalProvider = false }, owner, false);
+        }
+
         /// <summary>
-        /// New titles (from the library events): makes the link for each one that has a YouTube trailer and no
-        /// link yet. Titles that already have their link are left alone, so the folder refresh our own write
-        /// causes does nothing.
+        /// New titles and titles whose metadata changed (from the library events): their row is made, changed
+        /// or removed. A title whose own trailer just arrived loses its row.
         /// </summary>
         internal static void LinkNew(IEnumerable<long> ids)
         {
             lock (RunLock)
             {
                 if (!Plugin.Instance.Configuration.Enabled) return;
-                var todo = ids.Select(id => LibraryManager.GetItemById(id))
-                              .Where(i => i != null && YouTubeId(i) != null && !string.IsNullOrEmpty(i.ContainingFolderPath)
-                                          && !File.Exists(LinkPath(i.ContainingFolderPath)))
-                              .GroupBy(i => i.ContainingFolderPath, StringComparer.OrdinalIgnoreCase)
-                              .Select(g => g.First())
-                              .ToList();
-                if (todo.Count == 0) return;
-
-                var shared = SharedFolders(Candidates().ToList());
-                var outcome = new Outcome();
-                var made = new List<string>();
-                foreach (var item in todo)
+                var titles = Titles(ids);
+                if (titles.Count == 0) return;
+                // The other versions of these titles too, so a group is judged whole.
+                var keys = new HashSet<string>(titles.Select(t => t.PresentationUniqueKey ?? ""), StringComparer.Ordinal);
+                if (titles.Count < 50)
                 {
-                    var before = outcome.Created;
-                    var link = LinkFolder(item, item.ContainingFolderPath, shared, outcome);
-                    if (link != null && outcome.Created > before)
-                    {
-                        made.Add(link);
-                        Log.Info("Linked new title " + item.Name + ".");
-                    }
+                    var all = Titles().Where(t => keys.Contains(t.PresentationUniqueKey ?? "")).ToList();
+                    titles = all.Union(titles).GroupBy(t => t.InternalId).Select(g => g.First()).ToList();
                 }
-                if (made.Count == 0) return;
-                var state = Load();
-                state.Files = state.Files.Union(made, StringComparer.OrdinalIgnoreCase).ToList();
-                Save(state);
+                var ids2 = new HashSet<long>(titles.Select(t => t.InternalId));
+                var rows = Rows().Where(r => ids2.Contains(r.ParentId)).ToList();
+                var outcome = new Outcome();
+                Sync(titles, rows, outcome, CancellationToken.None, removeOrphans: false);
+                if (outcome.Created + outcome.Updated + outcome.Removed > 0)
+                    Log.Info("New titles: " + outcome.Created + " linked, " + outcome.Updated + " changed, " + outcome.Removed + " removed.");
             }
         }
 
         /// <summary>True when the link task has never run here (no links.json yet).</summary>
         internal static bool NeverRan => Load().Last == null;
+
+        /// <summary>True when link files of an earlier version may still be there.</summary>
+        internal static bool HasOldLinks()
+        {
+            if (Load().Files.Count > 0) return true;
+            try { return OldLinkItems().Count > 0; }
+            catch { return false; }
+        }
 
         internal static Outcome RemoveAll()
         {
@@ -294,68 +321,99 @@ namespace TrailerBridge
         private static Outcome RemoveAllLocked(string prefix)
         {
             var outcome = new Outcome();
-            // The files on record, and any in the library's trailers folders (a record lost or out of date).
-            var paths = new HashSet<string>(Load().Files, StringComparer.OrdinalIgnoreCase);
-            foreach (var folder in Candidates().Select(i => i.ContainingFolderPath).Where(f => !string.IsNullOrEmpty(f)).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var row in Rows())
             {
                 try
                 {
-                    var trailers = Path.Combine(folder, TrailersFolder);
-                    if (Directory.Exists(trailers))
-                        foreach (var f in Directory.GetFiles(trailers, "*" + Suffix)) paths.Add(f);
-                }
-                catch { }
-            }
-            foreach (var p in paths)
-            {
-                try
-                {
-                    if (!File.Exists(p) || !IsBridgeFile(p)) continue;
-                    File.Delete(p);
+                    Delete(row, null);
                     outcome.Removed++;
-                    var dir = Path.GetDirectoryName(p)!;
-                    RemoveFolderIfEmpty(dir);
-                    LibraryMonitor.ReportFileSystemChanged(Directory.Exists(dir) ? dir : Path.GetDirectoryName(dir)!);
                 }
                 catch (Exception ex)
                 {
                     outcome.Failed++;
-                    Log.Warn("Remove " + p + ": " + ex.Message);
+                    Log.Warn("Remove row " + row.InternalId + ": " + ex.Message);
                 }
             }
-            outcome.Message = prefix + outcome.Removed + " links removed" + (outcome.Failed > 0 ? ", " + outcome.Failed + " failed" : "") + ".";
+            var state = Load();
+            RemoveOldLinks(state, outcome, CancellationToken.None);
+            outcome.Message = prefix + outcome.Removed + " trailer links removed" +
+                              (outcome.OldLinksRemoved > 0 ? ", " + outcome.OldLinksRemoved + " old link files removed" : "") +
+                              (outcome.Failed > 0 ? ", " + outcome.Failed + " failed" : "") + ".";
             Save(new State { Last = outcome });
             Log.Info(outcome.Message);
             return outcome;
         }
 
-        /// <summary>A trailer that is not ours: in Emby's extras, in the trailers folder, or "-trailer" beside the video.</summary>
-        private static bool HasOwnTrailer(BaseItem item, string folder, string trailers)
+        /// <summary>The library's items for old link files (found by name; the file's content decides).</summary>
+        private static List<BaseItem> OldLinkItems() =>
+            LibraryManager.GetItemList(new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { nameof(Trailer), "Video", nameof(Movie) },
+                ExtraTypes = TrailerTypes,
+                Recursive = true
+            }).Where(i => (i.Path ?? "").EndsWith(Suffix, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        /// <summary>
+        /// Removes the link files earlier versions wrote (the ones on record and any the library knows by name),
+        /// their library items and the trailers folders left empty. The library monitor is told beforehand, so
+        /// no folder gets scanned for it.
+        /// </summary>
+        private static void RemoveOldLinks(State state, Outcome outcome, CancellationToken ct)
         {
+            var items = new Dictionary<string, BaseItem?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in state.Files) items[f] = null;
             try
             {
-                if (item.GetExtras(new[] { ExtraType.Trailer }).Any(t => !string.IsNullOrEmpty(t.Path) && !t.Path.EndsWith(Suffix, StringComparison.OrdinalIgnoreCase)))
-                    return true;
+                foreach (var i in OldLinkItems()) items[i.Path] = i;
             }
-            catch { }
-            if (Directory.Exists(trailers) &&
-                Directory.EnumerateFiles(trailers).Any(f => IsVideo(f) && !f.EndsWith(Suffix, StringComparison.OrdinalIgnoreCase)))
-                return true;
-            return Directory.EnumerateFiles(folder).Any(f =>
-            {
-                var n = Path.GetFileNameWithoutExtension(f);
-                return IsVideo(f) && (n.EndsWith("-trailer", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".trailer", StringComparison.OrdinalIgnoreCase)
-                                      || n.EndsWith("_trailer", StringComparison.OrdinalIgnoreCase) || n.Equals("trailer", StringComparison.OrdinalIgnoreCase));
-            });
-        }
+            catch (Exception ex) { Log.Warn("Old link files: " + ex.Message); }
+            if (items.Count == 0) return;
+            var watch = Stopwatch.StartNew();
 
-        private static bool IsVideo(string path) => VideoExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in items)
+            {
+                ct.ThrowIfCancellationRequested();
+                var path = pair.Key;
+                try
+                {
+                    var exists = File.Exists(path);
+                    if (exists && !IsBridgeFile(path)) continue;
+                    var dir = Path.GetDirectoryName(path)!;
+                    if (exists)
+                    {
+                        var touched = new[] { path, dir, Path.GetDirectoryName(dir) }.Where(p => !string.IsNullOrEmpty(p)).ToArray();
+                        foreach (var p in touched) LibraryMonitor.ReportFileSystemChangeBeginning(p!);
+                        try
+                        {
+                            File.Delete(path);
+                            RemoveFolderIfEmpty(dir);
+                        }
+                        finally
+                        {
+                            foreach (var p in touched) LibraryMonitor.ReportFileSystemChangeComplete(p!, false);
+                        }
+                    }
+                    var item = pair.Value ?? LibraryManager.FindByPath(path, false);
+                    if (item != null) Delete(item, null);
+                    if (exists || item != null) outcome.OldLinksRemoved++;
+                    Thread.Sleep(Pace);
+                }
+                catch (Exception ex)
+                {
+                    outcome.Failed++;
+                    Log.Warn("Old link file " + path + ": " + ex.Message);
+                }
+            }
+            Log.Info(outcome.OldLinksRemoved + " old link files removed in " + (int)watch.Elapsed.TotalSeconds + " s.");
+        }
 
         private static void RemoveFolderIfEmpty(string dir)
         {
             try
             {
-                if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+                if (Directory.Exists(dir) && string.Equals(Path.GetFileName(dir), "trailers", StringComparison.OrdinalIgnoreCase)
+                    && !Directory.EnumerateFileSystemEntries(dir).Any())
+                    Directory.Delete(dir);
             }
             catch { }
         }

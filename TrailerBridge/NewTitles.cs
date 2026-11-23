@@ -5,6 +5,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
 using System;
@@ -18,8 +19,9 @@ namespace TrailerBridge
 {
     /// <summary>
     /// Links new titles without waiting for the daily task: titles added or updated (the YouTube trailer
-    /// usually comes with the metadata refresh after the add) are collected and linked 45 seconds later.
-    /// On a server where the link task never ran, it runs once two minutes after startup.
+    /// usually comes with the metadata refresh after the add) are collected and linked 45 seconds later, and a
+    /// title whose own trailer arrives loses its row. On a server where the link task never ran, or where link
+    /// files of an earlier version are left, it runs once two minutes after startup, in the background.
     /// </summary>
     public class NewTitles : IServerEntryPoint
     {
@@ -27,7 +29,6 @@ namespace TrailerBridge
         private static readonly TimeSpan FirstRunDelay = TimeSpan.FromMinutes(2);
 
         private readonly ILibraryManager _library;
-        private readonly string[] _skipRoots;
         private readonly ConcurrentDictionary<long, byte> _pending = new ConcurrentDictionary<long, byte>();
         private readonly Timer _timer;
         private int _scheduled;
@@ -39,11 +40,6 @@ namespace TrailerBridge
             Log.Initialize(logManager);
             Links.Initialize(libraryManager, libraryMonitor, host, json);
             _library = libraryManager;
-            // The plugins' own files (HSC copies and the like), wherever the server keeps them.
-            _skipRoots = new[] { paths.PluginsPath, paths.PluginConfigurationsPath, "/config/plugins/" }
-                .Where(p => !string.IsNullOrEmpty(p))
-                .Select(p => p.TrimEnd('\\', '/') + Path.DirectorySeparatorChar)
-                .ToArray();
             _timer = new Timer(_ => Process(), null, Timeout.Infinite, Timeout.Infinite);
         }
 
@@ -57,13 +53,17 @@ namespace TrailerBridge
                 try
                 {
                     await Task.Delay(FirstRunDelay).ConfigureAwait(false);
-                    if (!Plugin.Instance.Configuration.Enabled) return;
-                    if (Links.NeverRan)
+                    if (!Plugin.Instance.Configuration.Enabled)
                     {
-                        Log.Info("First run: creating trailer links.");
+                        // Off with rows or old link files left (turned off while the server was down): remove them.
+                        if (Links.HasOldLinks() || Links.Count() > 0) Links.Update(CancellationToken.None);
+                        return;
+                    }
+                    if (Links.NeverRan || Links.HasOldLinks())
+                    {
+                        Log.Info("First run of this version: creating trailers" + (Links.NeverRan ? "." : " and removing the old link files."));
                         Links.Update(CancellationToken.None);
                     }
-                    else Links.AddHlsHint();
                 }
                 catch (Exception ex) { Log.Warn("First run: " + ex.Message); }
             });
@@ -74,14 +74,19 @@ namespace TrailerBridge
             try
             {
                 var item = e.Item;
-                if (item is not Movie && item is not Series) return;
-                if (item.ExtraType != null || item.IsVirtualItem) return;
-                if (!Plugin.Instance.Configuration.Enabled || Links.YouTubeId(item) == null) return;
-                var path = item.Path ?? "";
-                if (path.Length == 0 || path.EndsWith(Links.Suffix, StringComparison.OrdinalIgnoreCase)) return;
-                if (_skipRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase))) return;
+                if (item == null || !Plugin.Instance.Configuration.Enabled) return;
+                long id;
+                if (Links.IsTitle(item))
+                {
+                    if (Links.YouTubeId(item) == null) return;
+                    id = item.InternalId;
+                }
+                else if (item.ExtraType == ExtraType.Trailer && !string.IsNullOrEmpty(item.Path) && item.ParentId != 0
+                         && !item.Path.EndsWith(Links.Suffix, StringComparison.OrdinalIgnoreCase))
+                    id = item.ParentId; // the title's own trailer: its row goes
+                else return;
 
-                _pending[item.InternalId] = 0;
+                _pending[id] = 0;
                 if (Interlocked.Exchange(ref _scheduled, 1) == 0) _timer.Change(BatchDelay, Timeout.InfiniteTimeSpan);
             }
             catch { }

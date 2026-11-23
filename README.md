@@ -2,25 +2,24 @@
 
 An Emby Server plugin that makes YouTube trailers play on clients that can't open YouTube links (older TV apps hang on a remote trailer).
 
-For every movie with a YouTube trailer and no local trailer, TrailerBridge writes a tiny `.strm` link into the title's `trailers/` folder. Emby treats it as a local trailer. When it's played, the plugin resolves the YouTube video with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and hands Emby's ffmpeg YouTube's HLS stream (one video variant and its audio). Emby always plays it through its own ffmpeg (remux, or transcode when the client needs it), with seeking: the link keeps Emby from offering direct streaming, which would hand the client YouTube URLs it can't open. Nothing is downloaded or stored.
+For every movie and series with a YouTube trailer and no local trailer, TrailerBridge adds a local trailer to the title in Emby's library. It has no file: nothing is written into your media folders. When it's played, the plugin resolves the YouTube video with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and hands Emby's ffmpeg YouTube's HLS stream (one video variant and its audio). Emby always plays it through its own ffmpeg (remux, or transcode when the client needs it), with seeking. Nothing is downloaded or stored.
 
 ## Install
 Download `TrailerBridge.dll` from the [latest release](../../releases/latest), put it in Emby's `plugins` folder and restart Emby. Or install it with a GitHub repo plugin installer.
 
 ## Settings
-- **Enabled**: turning it off removes all link files.
+- **Enabled**: turning it off removes all of TrailerBridge's trailers. Uninstalling the plugin removes them too.
 - **yt-dlp**: found on PATH or downloaded into the plugin folder, updated weekly. yt-dlp needs a JavaScript runtime (deno or node); the plugin finds one or downloads deno.
-- **Create links now / Remove all links**, and a scheduled task *TrailerBridge: update trailer links* (daily). New titles get their link about a minute after Emby adds them and fetches their trailer; on a fresh install the links are made once, two minutes after startup.
+- **Create links now / Remove all links**, and a scheduled task *TrailerBridge: update trailer links* (daily). New titles get their trailer about a minute after Emby adds them and fetches their trailer; on a fresh install the trailers are made once, two minutes after startup. A title that gets a trailer of its own loses TrailerBridge's.
 - **Quality**: 1080p (default), 720p or 360p. TrailerBridge takes the best YouTube offers up to that, H.264 first (so older TVs get it without a transcode), VP9 when there is no H.264 at that size. If YouTube has no HLS for a video, it falls back to the 360p single-file mp4.
-- **Link address**: leave empty. Only set it to the server's LAN address if a client tries to open the trailer link itself instead of letting the server play it.
+
+## Upgrading from 0.1.0.8 or earlier
+Earlier versions wrote a `trailers/<title> - TrailerBridge.strm` link file into each title's folder. Two minutes after the first start of this version, in the background, TrailerBridge replaces them: it adds the new trailers, then deletes those link files (only its own: the name and the content must match), their library entries and the `trailers` folders that are left empty, without a library scan.
 
 ## Limits
-- Above 360p only when Emby's own ffmpeg plays the link (the normal case). A client that opens the link itself (with a link address set) gets the 360p mp4 through the server.
 - Some trailers are only on YouTube in 480p or lower; then that is what plays.
-- Emby keeps what it learned about a trailer the first time it played it. A trailer it first played as the 360p mp4 (links from version 0.1, Quality set to 360p at the time, or YouTube's HLS failing on that first play) stays 360p. To give those trailers a fresh start: **Remove all links**, run a library scan, then **Create links now**.
-- The first play of a trailer takes a few seconds while yt-dlp looks it up; later plays are cached.
-- Titles in shared or flat folders (several movies in one folder) are skipped.
-- The play link only works for Emby itself (and, with a link address set, the local network), and only for titles in the library.
+- The first play of a trailer takes a few seconds while yt-dlp looks it up; later plays are cached for a few hours.
+- The play link only works for Emby itself (from the server, with the plugin's key), and only for trailers in the library.
 
 ## License
 See [LICENSE](LICENSE).

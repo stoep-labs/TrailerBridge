@@ -32,6 +32,33 @@ namespace TrailerBridge
             public int Lines => Math.Max(Math.Min(Width, Height), (int)Math.Round(Math.Max(Width, Height) * 9 / 16.0));
 
             public string Describe => Width + "x" + Height + " " + Codec;
+
+            /// <summary>Emby's name for the video codec: h264, vp9, av1 or hevc.</summary>
+            public string VideoCodec =>
+                Codec.StartsWith("avc", StringComparison.OrdinalIgnoreCase) ? "h264"
+                : Codec.StartsWith("vp", StringComparison.OrdinalIgnoreCase) ? "vp9"
+                : Codec.StartsWith("av01", StringComparison.OrdinalIgnoreCase) ? "av1" : "hevc";
+
+            /// <summary>Emby's name for the audio codec (YouTube's HLS audio is AAC, sometimes Opus).</summary>
+            public string AudioCodec
+            {
+                get
+                {
+                    var codecs = Get(Attributes(Info), "CODECS");
+                    return codecs.IndexOf("opus", StringComparison.OrdinalIgnoreCase) >= 0
+                           && codecs.IndexOf("mp4a", StringComparison.OrdinalIgnoreCase) < 0 ? "opus" : "aac";
+                }
+            }
+
+            /// <summary>The audio's channels (CHANNELS of its first audio rendition), 2 when not given.</summary>
+            public int AudioChannels
+            {
+                get
+                {
+                    var c = Audio.Select(a => Get(Attributes(a), "CHANNELS").Split('/')[0]).FirstOrDefault();
+                    return int.TryParse(c, out var n) && n > 0 ? n : 2;
+                }
+            }
         }
 
         /// <summary>

@@ -38,6 +38,10 @@ namespace TrailerBridge
             /// <summary>Progressive mp4 (video and audio in one file), or "" when YouTube has none.</summary>
             public string Url = "";
             public DateTime ValidUntilUtc;
+            /// <summary>The chosen HLS variant (null for the mp4), for the media source Emby gets.</summary>
+            public Hls.Variant? Variant;
+            /// <summary>Seconds, or 0 when yt-dlp did not say.</summary>
+            public double Duration;
         }
 
         /// <summary>The YouTube video id in a trailer URL, or null when it is not a YouTube video.</summary>
@@ -94,16 +98,18 @@ namespace TrailerBridge
             var ytdlp = await YtDlp.EnsureAsync(ct).ConfigureAwait(false);
             var js = await YtDlp.JsRuntimeArgsAsync(ct).ConfigureAwait(false);
             var args = js + "--no-warnings --no-playlist --no-config -f " + YtDlp.Quote(Format) +
-                       " --print " + YtDlp.Quote("%(available_at|0)s|%(protocol)s|%(acodec)s|%(vcodec)s|%(url)s") +
+                       " --print " + YtDlp.Quote("%(duration|0)s|%(available_at|0)s|%(protocol)s|%(acodec)s|%(vcodec)s|%(url)s") +
                        (quality > 360 ? " --print " + YtDlp.Quote("%(formats.:.manifest_url)j") : "") +
                        " -- " + YtDlp.Quote("https://www.youtube.com/watch?v=" + videoId);
             var run = await YtDlp.RunAsync(ytdlp, args, TimeSpan.FromSeconds(90), ct).ConfigureAwait(false);
             var lines = run.Out.Replace("\r", "").Split('\n');
-            var fields = lines[0].Trim().Split(new[] { '|' }, 5);
-            if (run.Exit != 0 || fields.Length < 5)
+            var all = lines[0].Trim().Split(new[] { '|' }, 6);
+            if (run.Exit != 0 || all.Length < 6)
                 throw new InvalidOperationException("yt-dlp could not resolve " + videoId + ": " + FirstLine(run.Err));
 
             var r = new Resolved();
+            double.TryParse(all[0], NumberStyles.Float, CultureInfo.InvariantCulture, out r.Duration);
+            var fields = all.Skip(1).ToArray();
             var url = fields[4].Trim();
             if (fields[1] == "https" && fields[2] != "none" && fields[3] != "none" && IsGoogleVideo(url)) r.Url = url;
             string? master = null;
@@ -126,6 +132,7 @@ namespace TrailerBridge
                     if (v != null)
                     {
                         r.Playlist = Hls.Build(v);
+                        r.Variant = v;
                         chosen = "HLS " + v.Describe;
                     }
                 }

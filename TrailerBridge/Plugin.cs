@@ -25,11 +25,20 @@ namespace TrailerBridge
             Instance = this;
             DataPath = Path.Combine(applicationPaths.PluginsPath, "TrailerBridge");
             Directory.CreateDirectory(DataPath);
+            // The plugins' own files (HSC copies and the like), wherever the server keeps them.
+            SkipRoots = new[] { applicationPaths.PluginsPath, applicationPaths.PluginConfigurationsPath, "/config/plugins/" }
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Select(p => p.TrimEnd('\\', '/') + Path.DirectorySeparatorChar)
+                .Distinct()
+                .ToArray();
         }
+
+        /// <summary>Titles under these folders are never linked.</summary>
+        internal string[] SkipRoots { get; }
 
         private static readonly object KeyLock = new object();
 
-        /// <summary>The secret in the link files, made on first use (Configuration cannot be read in the constructor).</summary>
+        /// <summary>The secret in the trailers' source URL, made on first use (Configuration cannot be read in the constructor).</summary>
         internal string Key
         {
             get
@@ -53,19 +62,25 @@ namespace TrailerBridge
 
         public override void UpdateConfiguration(BasePluginConfiguration configuration)
         {
-            // The key is in every link file: the page never changes it.
-            var before = Configuration;
-            var wasEnabled = before.Enabled;
-            var oldHost = before.LinkHost ?? "";
+            // The key is in every trailer's source: the page never changes it.
+            var wasEnabled = Configuration.Enabled;
             if (configuration is PluginConfiguration incoming) incoming.Key = Key;
             base.UpdateConfiguration(configuration);
-            // Turned on or off, or another link address: the link files follow at once.
-            if (Configuration.Enabled != wasEnabled || (Configuration.LinkHost ?? "") != oldHost)
+            // Turned on or off: the trailers follow at once.
+            if (Configuration.Enabled != wasEnabled)
                 System.Threading.Tasks.Task.Run(() =>
                 {
                     try { if (Links.LibraryManager != null) Links.Update(System.Threading.CancellationToken.None); }
                     catch (Exception ex) { Log.Warn("Updating links: " + ex.Message); }
                 });
+        }
+
+        /// <summary>Uninstalled: the trailers go too (they cannot play without the plugin).</summary>
+        public override void OnUninstalling()
+        {
+            try { if (Links.LibraryManager != null) Links.RemoveAll(); }
+            catch (Exception ex) { Log.Warn("Removing trailers on uninstall: " + ex.Message); }
+            base.OnUninstalling();
         }
 
         public IEnumerable<PluginPageInfo> GetPages()

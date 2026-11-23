@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace TrailerBridge
 {
-    /// <summary>Creates and removes the link files (daily unless changed under Scheduled Tasks; new titles are linked as they arrive, see NewTitles).</summary>
+    /// <summary>Creates and removes the trailers (daily unless changed under Scheduled Tasks; new titles are linked as they arrive, see NewTitles).</summary>
     public class UpdateLinksTask : IScheduledTask
     {
         public UpdateLinksTask(ILogManager logManager, ILibraryManager libraryManager, ILibraryMonitor libraryMonitor,
@@ -22,12 +22,12 @@ namespace TrailerBridge
 
         public string Key => "TrailerBridgeUpdateLinks";
         public string Name => "TrailerBridge: update trailer links";
-        public string Description => "Adds a trailer link for every movie and series with a YouTube trailer and no trailer of its own, and removes the ones no longer needed.";
+        public string Description => "Adds a trailer for every movie and series with a YouTube trailer and no trailer of its own, and removes the ones no longer needed.";
         public string Category => "TrailerBridge";
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
-            // Daily only: a run checks every title's folder, which a busy server doesn't need right at startup.
+            // Daily only: new titles are linked as they arrive.
             return new[]
             {
                 new TaskTriggerInfo { Type = TaskTriggerInfo.TriggerInterval, IntervalTicks = TimeSpan.FromHours(24).Ticks }
