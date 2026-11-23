@@ -27,10 +27,10 @@ namespace TrailerBridge
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
+            // Daily only: a run checks every title's folder, which a busy server doesn't need right at startup.
             return new[]
             {
-                new TaskTriggerInfo { Type = TaskTriggerInfo.TriggerInterval, IntervalTicks = TimeSpan.FromHours(24).Ticks },
-                new TaskTriggerInfo { Type = TaskTriggerInfo.TriggerStartup }
+                new TaskTriggerInfo { Type = TaskTriggerInfo.TriggerInterval, IntervalTicks = TimeSpan.FromHours(24).Ticks }
             };
         }
 

@@ -10,7 +10,7 @@ Download `TrailerBridge.dll` from the [latest release](../../releases/latest), p
 ## Settings
 - **Enabled**: turning it off removes all link files.
 - **yt-dlp**: found on PATH or downloaded into the plugin folder, updated weekly. yt-dlp needs a JavaScript runtime (deno or node); the plugin finds one or downloads deno.
-- **Create links now / Remove all links**, and a scheduled task *TrailerBridge: update trailer links*.
+- **Create links now / Remove all links**, and a scheduled task *TrailerBridge: update trailer links* (daily). After installing, press **Create links now** once.
 - **Quality**: 1080p (default), 720p or 360p. TrailerBridge takes the best YouTube offers up to that, H.264 first (so older TVs get it without a transcode), VP9 when there is no H.264 at that size. If YouTube has no HLS for a video, it falls back to the 360p single-file mp4.
 - **Link address**: leave empty. Only set it to the server's LAN address if a client tries to open the trailer link itself instead of letting the server play it.
 
